@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <title>JW QUIZ</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="font-ctrl">
+      <button class="font-btn" onclick="changeFontSize(-2)">A-</button>
+      <button class="font-btn" onclick="changeFontSize(2)">A+</button>
+    </div>
+
+    <div id="app" style="width: 100%; display: flex; justify-content: center">
+      <section id="sec-login" class="card">
+        <h2>JW QUIZ</h2>
+        <p>이름을 동일하게 입력하여 입장하세요</p>
+        <input type="text" id="id-in" placeholder="이름 입력" />
+        <input type="password" id="pw-in" placeholder="이름 입력" />
+        <button onclick="handleLogin()">시작하기</button>
+      </section>
+
+      <section id="sec-admin" class="card hide">
+        <h2>제출자 관리 모드</h2>
+        <button onclick="openCreator()">새로운 날짜별 문제 만들기</button>
+        <button onclick="fetchQuizSets('admin')">
+          문제 목록 및 관리 (수정/삭제)
+        </button>
+        <button onclick="move('sec-sub-manage')">제출자 권한 추가</button>
+        <button onclick="fetchResultsList()" style="background: var(--success)">
+          참여자 기록 확인
+        </button>
+        <button onclick="location.reload()" style="background: var(--gray)">
+          로그아웃
+        </button>
+      </section>
+
+      <section id="sec-sub-manage" class="card hide">
+        <h2>제출자 권한 추가</h2>
+        <input type="text" id="new-sub-name" placeholder="추가할 이름" />
+        <button onclick="addSubmitter()">등록하기</button>
+        <button onclick="move('sec-admin')" style="background: var(--gray)">
+          뒤로가기
+        </button>
+      </section>
+
+      <section id="sec-make" class="card hide">
+        <h2 id="make-title">문제 세트 생성</h2>
+        <p id="make-date-label"></p>
+        <div id="questions-container"></div>
+        <div style="display: flex; gap: 0.6rem">
+          <button
+            onclick="addQuestionRow('choice')"
+            style="background: var(--success)"
+          >
+            + 객관식 추가
+          </button>
+          <button onclick="addQuestionRow('short')" style="background: #f59e0b">
+            + 주관식 추가
+          </button>
+        </div>
+        <button onclick="saveSetToFirebase()">전체 저장하기</button>
+        <div style="display: flex; gap: 0.6rem">
+          <button
+            id="btn-save-draft"
+            onclick="saveDraftToFirebase()"
+            style="background: var(--draft)"
+          >
+            임시 저장
+          </button>
+          <button onclick="move('sec-admin')" style="background: var(--gray)">
+            뒤로가기
+          </button>
+        </div>
+      </section>
+
+      <section id="sec-list" class="card hide">
+        <h2>퀴즈 목록</h2>
+        <div id="list-container"></div>
+        <button onclick="move('sec-admin')" id="admin-back-btn" class="hide">
+          관리자 메뉴로
+        </button>
+      </section>
+
+      <section id="sec-results" class="card hide">
+        <h2>참여자 기록 확인</h2>
+        <div id="results-list-container"></div>
+        <div id="result-detail-view" class="hide">
+          <hr
+            style="margin: 1.5rem 0; border: 0; border-top: 1px solid #e2e8f0"
+          />
+          <h3 id="result-detail-title">상세 기록</h3>
+          <div style="overflow-x: auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>참여자</th>
+                  <th>결과(O:즉시 / H:힌트)</th>
+                </tr>
+              </thead>
+              <tbody id="result-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <button onclick="move('sec-admin')" style="background: var(--gray)">
+          뒤로가기
+        </button>
+      </section>
+
+      <section id="sec-play" class="card hide">
+        <h2 id="play-set-title"></h2>
+        <div id="play-area"></div>
+        <button onclick="move('sec-list')" style="background: var(--gray)">
+          목록으로
+        </button>
+      </section>
+    </div>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-app.js";
+      import {
+        getDatabase,
+        ref,
+        push,
+        onValue,
+        set,
+        remove,
+      } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-database.js";
+
+      const firebaseConfig = {
+        apiKey: "AIzaSyCh3ACS-5LBTCkFyqNYXrxtT9rwQBFousc",
+        authDomain: "jw-quiz-20870.firebaseapp.com",
+        projectId: "jw-quiz-20870",
+        databaseURL: "https://jw-quiz-20870-default-rtdb.firebaseio.com",
+        storageBucket: "jw-quiz-20870.firebasestorage.app",
+        messagingSenderId: "56088125204",
+        appId: "1:56088125204:web:f03a1dea2b659cb764ec01",
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const db = getDatabase(app);
+
+      let currentUser = "";
+      let currentRole = "user";
+      let editingKey = null;
+      let originalDate = "";
+      let submitterList = ["반영"];
+      let hintTracker = {};
+
+      // 글자 크기 조절 (html 루트 기준 수정)
+      window.changeFontSize = function (offset) {
+        const root = document.documentElement;
+        const style = getComputedStyle(root);
+        const currentSize = parseFloat(style.getPropertyValue("--base-font"));
+        let newSize = currentSize + offset;
+        if (newSize >= 12) {
+          if (newSize <= 40) {
+            root.style.setProperty("--base-font", newSize + "px");
+          }
+        }
+      };
+
+      onValue(ref(db, "submitters"), function (snap) {
+        if (snap.exists()) {
+          submitterList = Object.values(snap.val());
+        }
+      });
+
+      window.handleLogin = function () {
+        const id = document.getElementById("id-in").value;
+        const pw = document.getElementById("pw-in").value;
+        if (id === pw) {
+          if (id !== "") {
+            currentUser = id;
+            if (submitterList.includes(id)) {
+              currentRole = "admin";
+              move("sec-admin");
+            } else {
+              currentRole = "user";
+              fetchQuizSets("user");
+            }
+          }
+        } else {
+          alert("아이디와 비전에 동일한 이름을 입력하세요.");
+        }
+      };
+
+      window.move = function (id) {
+        document.querySelectorAll("section").forEach(function (s) {
+          s.classList.add("hide");
+        });
+        document.getElementById(id).classList.remove("hide");
+      };
+
+      window.addSubmitter = function () {
+        const name = document.getElementById("new-sub-name").value;
+        if (name !== "") {
+          set(ref(db, "submitters/" + name), name).then(function () {
+            alert("제출자가 등록되었습니다.");
+            document.getElementById("new-sub-name").value = "";
+          });
+        }
+      };
+
+      window.openCreator = function () {
+        editingKey = null;
+        const now = new Date();
+        originalDate =
+          now.getFullYear() +
+          "년 " +
+          (now.getMonth() + 1) +
+          "월 " +
+          now.getDate() +
+          "일";
+        document.getElementById("make-title").innerText = "새 문제 세트 생성";
+        document.getElementById("make-date-label").innerText =
+          "등록 날짜: " + originalDate;
+        document.getElementById("questions-container").innerHTML = "";
+        document.getElementById("btn-save-draft").classList.remove("hide");
+        move("sec-make");
+      };
+
+      window.addQuestionRow = function (type, data = null) {
+        const container = document.getElementById("questions-container");
+        const div = document.createElement("div");
+        div.className = "q-form-item";
+        div.dataset.type = type;
+        let html =
+          '<button class="btn-remove-row" style="background:var(--error); width:auto; padding:5px 10px; font-size:12px; float:right;" onclick="this.parentElement.remove()">X</button>';
+        html += "<h4>" + (type === "choice" ? "객관식" : "주관식") + "</h4>";
+        html +=
+          '<textarea class="q-txt" placeholder="질문">' +
+          (data ? data.txt : "") +
+          "</textarea>";
+        if (type === "choice") {
+          for (let i = 0; i < 4; i = i + 1) {
+            const val = data && data.options ? data.options[i] : "";
+            html +=
+              '<input type="text" class="c-opt" placeholder="보기 ' +
+              (i + 1) +
+              '" value="' +
+              val +
+              '">';
+          }
+          html +=
+            '<input type="number" class="q-ans" placeholder="정답 번호" value="' +
+            (data ? data.ans : "") +
+            '">';
+        } else {
+          html +=
+            '<input type="text" class="q-ans" placeholder="정답" value="' +
+            (data ? data.ans : "") +
+            '">';
+        }
+        html +=
+          '<input type="text" class="q-hint" placeholder="힌트" value="' +
+          (data ? data.hint : "") +
+          '">';
+        div.innerHTML = html;
+        container.appendChild(div);
+      };
+
+      window.saveSetToFirebase = function () {
+        const forms = document.querySelectorAll(".q-form-item");
+        if (forms.length === 0) {
+          alert("문제를 추가해 주세요.");
+          return;
+        }
+        const questions = Array.from(forms).map(function (form) {
+          const type = form.dataset.type;
+          const qData = {
+            type: type,
+            txt: form.querySelector(".q-txt").value,
+            ans: form.querySelector(".q-ans").value,
+            hint: form.querySelector(".q-hint").value,
+          };
+          if (type === "choice") {
+            qData.options = Array.from(form.querySelectorAll(".c-opt")).map(
+              function (i) {
+                return i.value;
+              }
+            );
+          }
+          return qData;
+        });
+        const setData = {
+          date: originalDate,
+          questions,
+          isModified: editingKey !== null,
+        };
+        if (editingKey === null) {
+          push(ref(db, "quizSets"), setData).then(function () {
+            alert("저장 성공!");
+            move("sec-admin");
+          });
+        } else {
+          set(ref(db, "quizSets/" + editingKey), setData).then(function () {
+            alert("수정 완료!");
+            move("sec-admin");
+          });
+        }
+      };
+
+      window.saveDraftToFirebase = function () {
+        const forms = document.querySelectorAll(".q-form-item");
+        const questions = Array.from(forms).map(function (form) {
+          const type = form.dataset.type;
+          const qData = {
+            type,
+            txt: form.querySelector(".q-txt").value,
+            ans: form.querySelector(".q-ans").value,
+            hint: form.querySelector(".q-hint").value,
+          };
+          if (type === "choice") {
+            qData.options = Array.from(form.querySelectorAll(".c-opt")).map(
+              function (i) {
+                return i.value;
+              }
+            );
+          }
+          return qData;
+        });
+        const draftData = {
+          date: originalDate,
+          questions,
+          saveTime: new Date().toLocaleString(),
+        };
+        push(ref(db, "drafts"), draftData).then(function () {
+          alert("임시 저장되었습니다.");
+        });
+      };
+
+      window.fetchQuizSets = function (role) {
+        move("sec-list");
+        const backBtn = document.getElementById("admin-back-btn");
+        if (role === "admin") {
+          backBtn.classList.remove("hide");
+        } else {
+          backBtn.classList.add("hide");
+        }
+        onValue(ref(db, "quizSets"), function (snap) {
+          const container = document.getElementById("list-container");
+          container.innerHTML = "";
+          if (snap.exists()) {
+            Object.entries(snap.val()).forEach(function ([key, set]) {
+              const div = document.createElement("div");
+              div.className = "set-item";
+              const bMain = document.createElement("button");
+              bMain.className = "btn-set-main";
+              bMain.innerText =
+                set.date + "자 퀴즈" + (set.isModified ? " (수정본)" : "");
+              bMain.onclick = function () {
+                startPlaySet(key, set);
+              };
+              div.appendChild(bMain);
+              if (currentRole === "admin") {
+                const bEdit = document.createElement("button");
+                bEdit.className = "btn-action";
+                bEdit.style.background = "var(--gray)";
+                bEdit.innerText = "수정";
+                bEdit.onclick = function () {
+                  prepareEditSet(key, set);
+                };
+                div.appendChild(bEdit);
+                const bDel = document.createElement("button");
+                bDel.className = "btn-action";
+                bDel.style.background = "var(--error)";
+                bDel.innerText = "삭제";
+                bDel.onclick = function () {
+                  if (confirm("삭제할까요?"))
+                    remove(ref(db, "quizSets/" + key));
+                };
+                div.appendChild(bDel);
+              }
+              container.appendChild(div);
+            });
+          }
+        });
+      };
+
+      function prepareEditSet(key, setData) {
+        editingKey = key;
+        originalDate = setData.date;
+        document.getElementById("make-title").innerText = "문제 세트 수정";
+        document.getElementById("make-date-label").innerText =
+          "최초 등록일: " + originalDate;
+        document.getElementById("questions-container").innerHTML = "";
+        document.getElementById("btn-save-draft").classList.add("hide");
+        if (setData.questions) {
+          setData.questions.forEach(function (q) {
+            addQuestionRow(q.type, q);
+          });
+        }
+        move("sec-make");
+      }
+
+      function startPlaySet(setKey, setData) {
+        move("sec-play");
+        document.getElementById("play-set-title").innerText =
+          setData.date + " 퀴즈";
+        const area = document.getElementById("play-area");
+        area.innerHTML = "";
+        hintTracker = {};
+        setData.questions.forEach(function (q, idx) {
+          const div = document.createElement("div");
+          div.className = "q-form-item";
+          div.innerHTML = "<h4>Q" + (idx + 1) + ". " + q.txt + "</h4>";
+          hintTracker[idx] = false;
+          if (q.type === "choice") {
+            q.options.forEach(function (opt, oIdx) {
+              const btn = document.createElement("button");
+              btn.style.background = "#fff";
+              btn.style.color = "#333";
+              btn.style.border = "1px solid #ddd";
+              btn.innerText = oIdx + 1 + ". " + opt;
+              btn.onclick = function () {
+                if (String(oIdx + 1) === q.ans) {
+                  btn.style.backgroundColor = "var(--success)";
+                  btn.style.color = "white";
+                  set(
+                    ref(
+                      db,
+                      "results/" + setKey + "/" + currentUser + "/" + idx
+                    ),
+                    hintTracker[idx] ? "H" : "O"
+                  );
+                  alert("정답입니다!");
+                } else {
+                  btn.style.backgroundColor = "var(--error)";
+                  btn.style.color = "white";
+                  hintTracker[idx] = true;
+                  alert("힌트: " + q.hint);
+                }
+              };
+              div.appendChild(btn);
+            });
+          } else {
+            const input = document.createElement("input");
+            const chkBtn = document.createElement("button");
+            chkBtn.innerText = "확인";
+            chkBtn.onclick = function () {
+              if (input.value === q.ans) {
+                input.style.backgroundColor = "var(--success)";
+                input.style.color = "white";
+                set(
+                  ref(db, "results/" + setKey + "/" + currentUser + "/" + idx),
+                  hintTracker[idx] ? "H" : "O"
+                );
+                alert("정답입니다!");
+              } else {
+                input.style.backgroundColor = "var(--error)";
+                input.style.color = "white";
+                hintTracker[idx] = true;
+                alert("힌트: " + q.hint);
+              }
+            };
+            div.appendChild(input);
+            div.appendChild(chkBtn);
+          }
+          area.appendChild(div);
+        });
+      }
+
+      window.fetchResultsList = function () {
+        move("sec-results");
+        document.getElementById("result-detail-view").classList.add("hide");
+        onValue(ref(db, "quizSets"), function (snap) {
+          const container = document.getElementById("results-list-container");
+          container.innerHTML = "<h4>퀴즈를 선택해 기록을 확인하세요</h4>";
+          if (snap.exists()) {
+            Object.entries(snap.val()).forEach(function ([key, set]) {
+              const b = document.createElement("button");
+              b.className = "btn-set-main";
+              b.innerText = set.date + " 기록 확인";
+              b.onclick = function () {
+                showDetailResults(key, set);
+              };
+              container.appendChild(b);
+            });
+          }
+        });
+      };
+
+      function showDetailResults(setKey, setData) {
+        document.getElementById("result-detail-view").classList.remove("hide");
+        document.getElementById("result-detail-title").innerText =
+          setData.date + " 상세 기록";
+        onValue(ref(db, "results/" + setKey), function (snap) {
+          const tableBody = document.getElementById("result-table-body");
+          tableBody.innerHTML = "";
+          if (snap.exists()) {
+            Object.entries(snap.val()).forEach(function ([user, answers]) {
+              const tr = document.createElement("tr");
+              const tdUser = document.createElement("td");
+              tdUser.innerText = user;
+              const tdAns = document.createElement("td");
+              let ansSum = [];
+              Object.entries(answers).forEach(function ([idx, res]) {
+                const cls = res === "O" ? "status-perfect" : "status-hint";
+                ansSum.push(
+                  "<span class='" +
+                    cls +
+                    "'>Q" +
+                    (parseInt(idx) + 1) +
+                    ":" +
+                    res +
+                    "</span>"
+                );
+              });
+              tdAns.innerHTML = ansSum.join(" / ");
+              tr.appendChild(tdUser);
+              tr.appendChild(tdAns);
+              tableBody.appendChild(tr);
+            });
+          } else {
+            tableBody.innerHTML =
+              "<tr><td colspan='2'>기록이 없습니다.</td></tr>";
+          }
+        });
+      }
+    </script>
+  </body>
+</html>
